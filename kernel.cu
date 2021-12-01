@@ -1,52 +1,42 @@
-#include <stdio.h>
-
-#define BLOCK_SIZE 512
-#define MAX_BLOCK_NUM 16
-
-
-__global__ void histo_kernel(unsigned int* input, unsigned int* bins, unsigned int num_elements, unsigned int num_bins)
+__global__ void histo_kernel(unsigned int *buffer, long size, unsigned int *histo, unsigned int num_bins)
 {
-	
-    /*************************************************************************/
-    // INSERT KERNEL CODE HERE
+	extern __shared__ unsigned int histo_private[];
+	unsigned int i = threadIdx.x + blockIdx.x * blockDim.x;
+	// stride is total number of threads
+	unsigned int stride = blockDim.x * gridDim.x;
+	// All threads handle blockDim.x * gridDim.x
+	// consecutive elements
 
-    __shared__ unsigned int hist_private[4096];
+	//inititialize private histogram
+	for (int j = 0; j < (num_bins-1)/blockDim.x+1; ++j)
+		if (blockDim.x*j+threadIdx.x<num_bins)
+			histo_private[blockDim.x*j+threadIdx.x]=0;
+	__syncthreads();
 
-    for (int i = threadIdx.x; i < num_bins; i += BLOCK_SIZE)
-        hist_private[i] = 0;
-    __syncthreads();
+	//populate private histogram
+	while (i < size) {
+		atomicAdd(&(histo_private[buffer[i]]), 1);
+		i += stride;
+	}
+	__syncthreads();
 
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    int stride = blockDim.x * gridDim.x;
-
-    while (i < num_elements)
-    {
-        atomicAdd(&(hist_private[input[i]]), 1);
-        i += stride;
-    }
-    __syncthreads();
-    
-    for (int i = threadIdx.x; i < num_bins; i += BLOCK_SIZE)
-        atomicAdd(&(bins[i]), hist_private[i]);
-	
-	  /*************************************************************************/
+	//Transfer data from shared memories to global memory
+	for (int k = 0; k < (num_bins-1)/blockDim.x+1; ++k)
+		if (blockDim.x*k+threadIdx.x<num_bins)
+			atomicAdd(&(histo[blockDim.x*k+threadIdx.x]),
+				histo_private[blockDim.x*k+threadIdx.x]);
 }
 
-void histogram(unsigned int* input, unsigned int* bins, unsigned int num_elements, unsigned int num_bins) 
-{
+/******************************************************************************
+Setup and invoke your kernel(s) in this function. You may also allocate more
+GPU memory if you need to
+*******************************************************************************/
+void histogram(unsigned int* input, unsigned int* bins, unsigned int num_elements,
+        unsigned int num_bins) {
 
-	  /*************************************************************************/
-    //INSERT CODE HERE
-    dim3 dim_grid, dim_block;
-    dim_block.x = BLOCK_SIZE; dim_block.y = dim_block.z = 1;
-    int blocknum = (num_elements-1)/BLOCK_SIZE+1;
-    dim_grid.x = (blocknum > MAX_BLOCK_NUM ? MAX_BLOCK_NUM : blocknum);
-    dim_grid.y = dim_grid.z = 1;
-
-    hist_kernel<<<dim_grid, dim_block>>>(input, bins, num_elements, num_bins);
-
-	  /*************************************************************************/
-
+    // INSERT CODE HERE
+    const int BLOCK_SIZE = 512;
+    histo_kernel<<<(num_elements-1)/BLOCK_SIZE+1,BLOCK_SIZE,num_bins*sizeof(unsigned int)>>>(input,num_elements,bins,num_bins);
 }
 
 
